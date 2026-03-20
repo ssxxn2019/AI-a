@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #3b82f6;
+  --color-success: #10b981;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+}
+
+:root {
+  --color-up: #ef4444;
+  --color-down: #10b981;
+}
+
+body {
+  @apply bg-gray-100 text-gray-800 antialiased;
+}
+
+.stock-up {
+  color: var(--color-up);
+}
+
+.stock-down {
+  color: var(--color-down);
+}
+
+#app {
+  min-height: 100vh;
+}
