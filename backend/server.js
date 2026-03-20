@@ -258,109 +258,247 @@ app.get('/api/capital-flow/:code', async (req, res) => {
 
 app.get('/api/recommend', async (req, res) => {
   try {
-    const { maxPrice = 20 } = req.query
-    const cacheKey = `recommend_${maxPrice}`
+    const { maxPrice = 20, limit = 10 } = req.query
+    const cacheKey = `recommend_${maxPrice}_${limit}`
     const cached = cache.get(cacheKey)
     if (cached) return res.json(cached)
 
-    const stockCodes = [
-      { code: '002185', name: '华天科技', industry: '半导体', risk: '中', reasons: ['价格低估', '量比放大', '技术面修复'] },
-      { code: '002241', name: '歌尔股份', industry: '消费电子', risk: '中', reasons: ['苹果产业链', '超跌反弹', '主力介入'] },
-      { code: '002374', name: '丽鹏股份', industry: '包装印刷', risk: '中', reasons: ['低价筹码', '板块轮动', '技术企稳'] },
-      { code: '300088', name: '长信科技', industry: '电子元件', risk: '中', reasons: ['新能源概念', '超跌反弹', '资金介入'] },
-      { code: '002456', name: '欧菲光', industry: '光学光电子', risk: '高', reasons: ['超跌低价', '风险较高', '谨慎操作'] },
-      { code: '300083', name: '创世纪', industry: '通用设备', risk: '中', reasons: ['数控机床', '超跌反弹', '板块轮动'] },
-      { code: '300220', name: '金升智能', industry: '机械行业', risk: '中', reasons: ['智能制造', '技术修复', '量比放大'] },
-      { code: '300432', name: '富临精工', industry: '汽车零部件', risk: '中', reasons: ['新能源车', '超跌反弹', '主力护盘'] },
-      { code: '002055', name: '得润电子', industry: '电子元件', risk: '中', reasons: ['汽车电子', '超跌低价', '技术企稳'] },
-      { code: '002331', name: '皖通科技', industry: '软件服务', risk: '中', reasons: ['智慧交通', '超跌反弹', '资金关注'] },
+    // 从新浪获取A股实时报价（主板+创业板代表性股票）
+    // 每次获取市场上有代表性的股票进行筛选
+    const allStockCodes = [
+      'sh600000','sh600010','sh600015','sh600016','sh600018','sh600019','sh600028','sh600030','sh600031','sh600036',
+      'sh600048','sh600050','sh600104','sh600109','sh600111','sh600150','sh600160','sh600176','sh600183','sh600196',
+      'sh600276','sh600309','sh600406','sh600436','sh600519','sh600547','sh600570','sh600585','sh600588','sh600690',
+      'sh600703','sh600745','sh600760','sh600809','sh600837','sh600887','sh600893','sh600900','sh600905','sh600918',
+      'sh600926','sh600989','sh601006','sh601012','sh601066','sh601088','sh601118','sh601138','sh601166','sh601169',
+      'sh601186','sh601211','sh601236','sh601288','sh601318','sh601328','sh601336','sh601390','sh601398','sh601601',
+      'sh601628','sh601658','sh601688','sh601818','sh601857','sh601888','sh601899','sh601919','sh601939','sh601985',
+      'sh601988','sh601989','sh601995','sh603259','sh603288','sh603501','sh603799','sh603986',
+      'sz000001','sz000002','sz000063','sz000100','sz000333','sz000338','sz000425','sz000568','sz000596','sz000651',
+      'sz000661','sz000708','sz000725','sz000768','sz000858','sz000876','sz000895','sz000938','sz000976','sz000999',
+      'sz002001','sz002007','sz002027','sz002049','sz002050','sz002142','sz002153','sz002171','sz002185','sz002236',
+      'sz002241','sz002252','sz002304','sz002311','sz002352','sz002371','sz002410','sz002415','sz002456','sz002460',
+      'sz002466','sz002475','sz002493','sz002555','sz002601','sz002624','sz002673','sz002714','sz002736','sz002812',
+      'sz300001','sz300003','sz300015','sz300033','sz300059','sz300122','sz300124','sz300142','sz300274','sz300496',
     ]
 
-    const sinaCodes = stockCodes.map(s => {
-      if (s.code.startsWith('6')) return `sh${s.code}`
-      return `sz${s.code}`
-    }).join(',')
-
-    let stockData = []
     let rawData = []
-
     try {
-      const response = await axios.get(`https://hq.sinajs.cn/list=${sinaCodes}`, {
-        headers: {
-          'Referer': 'https://finance.sina.com.cn',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        responseType: 'arraybuffer',
-        timeout: 8000
-      })
+      // 分批获取，每次50支
+      const batchSize = 50
+      for (let i = 0; i < allStockCodes.length; i += batchSize) {
+        const batch = allStockCodes.slice(i, i + batchSize)
+        const response = await axios.get(`https://hq.sinajs.cn/list=${batch.join(',')}`, {
+          headers: {
+            'Referer': 'https://finance.sina.com.cn',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          },
+          responseType: 'arraybuffer',
+          timeout: 15000
+        })
 
-      const buffer = Buffer.from(response.data)
-      const dataStr = iconv.decode(buffer, 'gbk')
+        const buffer = Buffer.from(response.data)
+        const dataStr = iconv.decode(buffer, 'gbk')
 
-      const lines = dataStr.split('\n')
-      for (const line of lines) {
-        const match = line.match(/hq_str_(\w+)="([^"]+)"/)
-        if (match) {
-          const code = match[1].replace(/^(sz|sh)/, '')
-          const fields = match[2].split(',')
-          rawData.push({ code, fields })
+        const lines = dataStr.split('\n')
+        for (const line of lines) {
+          const match = line.match(/hq_str_(\w+)="([^"]+)"/)
+          if (match) {
+            const code = match[1].replace(/^(sz|sh)/, '')
+            const fields = match[2].split(',')
+            if (fields.length > 10 && fields[0]) {
+              rawData.push({ code, fields })
+            }
+          }
         }
       }
     } catch (e) {
-      console.log('新浪API失败:', e.message)
+      console.log('获取股票数据失败:', e.message)
     }
 
-    const recommendations = stockCodes.map((stock, idx) => {
-      const raw = rawData.find(r => r.code === stock.code)
-      const fields = raw?.fields || []
+    // 筛选并打分
+    const scoredStocks = rawData
+      .map(({ code, fields }) => {
+        const name = fields[0]
+        const open = parseFloat(fields[1]) || 0
+        const yesterdayClose = parseFloat(fields[2]) || 0
+        const current = parseFloat(fields[3]) || 0
+        const high = parseFloat(fields[4]) || 0
+        const low = parseFloat(fields[5]) || 0
+        const volume = parseInt(fields[8]) || 0
+        const amount = parseFloat(fields[9]) || 0
 
-      const price = parseFloat(fields[3]) || 0
-      const open = parseFloat(fields[1]) || 0
-      const yesterdayClose = parseFloat(fields[2]) || 0
-      const high = parseFloat(fields[4]) || 0
-      const low = parseFloat(fields[5]) || 0
-      const volume = parseInt(fields[8]) || 0
-      const amount = parseFloat(fields[9]) || 0
+        // 排除无效数据
+        if (current <= 0 || yesterdayClose <= 0) return null
 
-      const change = price - yesterdayClose
-      const changePercent = yesterdayClose > 0 ? (change / yesterdayClose) * 100 : 0
+        // 计算涨跌
+        const change = current - yesterdayClose
+        const changePercent = (change / yesterdayClose) * 100
 
-      const turnover = price > 0 && amount > 0 ? ((amount / price) / 100000000 * 100).toFixed(2) : '0'
-      const volumeRatio = parseFloat(fields[31]) || 0
+        // 排除ST、*ST、688开头（科创板）
+        if (name.includes('ST') || name.includes('*ST') || code.startsWith('688')) return null
 
-      const buyRange = price > 0 ? `${(price * 0.97).toFixed(2)}-${(price * 1.02).toFixed(2)}` : '暂无'
-      const targetProfit = price > 0 ? (price * 1.15).toFixed(2) : '暂无'
-      const stopLoss = price > 0 ? (price * 0.93).toFixed(2) : '暂无'
+        // 排除价格不在范围内的
+        if (current > maxPrice || current < 3) return null
 
-      return {
-        code: stock.code,
-        name: fields[0] || stock.name,
-        price,
-        change,
-        changePercent,
-        risk: stock.risk,
-        industry: stock.industry,
-        marketCap: amount > 0 ? formatNumber(amount) : '暂无',
-        reasons: stock.reasons,
-        buyRange,
-        targetProfit,
-        stopLoss,
-        volume: formatNumber(volume),
-        turnover: turnover + '%',
-        volumeRatio: volumeRatio > 0 ? volumeRatio.toFixed(2) : '1.0',
-        open,
-        high,
-        low
-      }
-    }).filter(s => s.price > 0 && s.price <= parseFloat(maxPrice))
+        // 排除涨跌停（波动太大风险高）
+        if (changePercent > 9.5 || changePercent < -9.5) return null
+
+        // 计算换手率（成交额/市值估算）
+        const turnoverRate = amount > 0 && current > 0 ? ((amount / current) / 100000000 * 100) : 0
+
+        // 排除换手率异常的（>25%可能有炒作风险）
+        if (turnoverRate > 25) return null
+
+        // ===== 打分算法 =====
+        let score = 0
+        const factorDetails = []
+
+        // 1. 量比打分 (15分) - 成交量活跃度
+        const volumeRatio = parseFloat(fields[31]) || 1
+        if (volumeRatio > 2) {
+          score += 15
+          factorDetails.push('量比放大')
+        } else if (volumeRatio > 1.5) {
+          score += 10
+        } else if (volumeRatio > 1) {
+          score += 5
+        }
+
+        // 2. 涨幅打分 (20分) - 上涨趋势但不过于追高
+        if (changePercent > 0 && changePercent <= 3) {
+          score += 20
+          factorDetails.push('温和上涨')
+        } else if (changePercent > 3 && changePercent <= 6) {
+          score += 15
+          factorDetails.push('涨幅较大')
+        } else if (changePercent > 6 && changePercent <= 9) {
+          score += 10
+          factorDetails.push('强势上涨')
+        } else if (changePercent >= -2 && changePercent <= 0) {
+          score += 12
+          factorDetails.push('小幅回调')
+        }
+
+        // 3. 换手率打分 (15分) - 活跃度适中为佳
+        if (turnoverRate >= 3 && turnoverRate <= 10) {
+          score += 15
+        } else if (turnoverRate > 10 && turnoverRate <= 20) {
+          score += 10
+        } else if (turnoverRate < 3 && turnoverRate > 0) {
+          score += 5
+        }
+
+        // 4. 价格位置打分 (10分) - 今日价格在近期相对低位
+        const todayRange = high - low
+        const pricePosition = todayRange > 0 ? ((current - low) / todayRange) : 0.5
+        if (pricePosition < 0.4) {
+          score += 10
+          factorDetails.push('价格低位')
+        } else if (pricePosition > 0.6 && pricePosition < 0.85) {
+          score += 8
+        } else if (pricePosition >= 0.85) {
+          score += 3
+          factorDetails.push('价格高位')
+        }
+
+        // 5. 振幅打分 (10分) - 波动稳健
+        const amplitude = yesterdayClose > 0 ? ((high - low) / yesterdayClose) * 100 : 0
+        if (amplitude >= 2 && amplitude <= 5) {
+          score += 10
+        } else if (amplitude > 5 && amplitude <= 8) {
+          score += 7
+        } else if (amplitude < 2) {
+          score += 5
+        } else {
+          score += 2
+        }
+
+        // 6. 资金体量打分 (15分) - 成交金额适中（不能太小也不能太大）
+        const amountLevel = amount / 100000000 // 亿
+        if (amountLevel >= 3 && amountLevel <= 15) {
+          score += 15
+        } else if (amountLevel > 15 && amountLevel <= 30) {
+          score += 12
+        } else if (amountLevel >= 1 && amountLevel < 3) {
+          score += 8
+        }
+
+        // 7. 趋势稳健打分 (15分) - 近几日表现
+        // 用今开与昨收的关系简单判断
+        const openChange = yesterdayClose > 0 ? ((open - yesterdayClose) / yesterdayClose) * 100 : 0
+        if (openChange >= -1 && openChange <= 2) {
+          score += 15
+        } else if (openChange >= -3 && openChange < -1) {
+          score += 10
+        } else if (openChange > 2 && openChange <= 5) {
+          score += 8
+        }
+
+        // 风险等级判定
+        let riskLevel = '低'
+        if (score < 40) riskLevel = '中'
+        if (score < 25) riskLevel = '高'
+        if (turnoverRate > 20 || amplitude > 10) riskLevel = '高'
+
+        // 计算推荐理由
+        const reasons = []
+        if (factorDetails.length > 0) {
+          reasons.push(...factorDetails.slice(0, 2))
+        }
+        if (volumeRatio > 1.5) reasons.push('量比活跃')
+        if (changePercent > 0 && changePercent <= 5) reasons.push('走势稳健')
+        if (turnoverRate >= 3 && turnoverRate <= 15) reasons.push('换手适中')
+        if (reasons.length < 2) reasons.push('综合筛选')
+
+        return {
+          code,
+          name,
+          price: current,
+          change,
+          changePercent,
+          open,
+          high,
+          low,
+          volume: formatNumber(volume),
+          turnover: turnoverRate.toFixed(2) + '%',
+          volumeRatio: volumeRatio.toFixed(2),
+          amplitude: amplitude.toFixed(2) + '%',
+          amount: amountLevel.toFixed(2) + '亿',
+          risk: riskLevel,
+          industry: '实时行情',
+          marketCap: amount > 0 ? formatNumber(amount) : '暂无',
+          reasons: reasons.slice(0, 3),
+          buyRange: `${(current * 0.98).toFixed(2)}-${(current * 1.02).toFixed(2)}`,
+          targetProfit: (current * 1.12).toFixed(2),
+          stopLoss: (current * 0.95).toFixed(2),
+          score
+        }
+      })
+      .filter(s => s !== null && s.score >= 25)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, parseInt(limit))
 
     const result = {
-      stocks: recommendations,
-      updateTime: new Date().toLocaleTimeString(),
-      filter: { maxPrice: parseFloat(maxPrice) }
+      stocks: scoredStocks,
+      updateTime: new Date().toLocaleString('zh-CN'),
+      filter: { maxPrice: parseFloat(maxPrice), totalScanned: rawData.length },
+      algorithm: {
+        description: '多因素综合打分算法',
+        factors: [
+          { name: '量比活跃度', weight: '15%', description: '成交量放大程度' },
+          { name: '涨幅合理性', weight: '20%', description: '上涨但不过于追高' },
+          { name: '换手率适度', weight: '15%', description: '活跃度适中(3%-25%)' },
+          { name: '价格位置', weight: '10%', description: '今日价格在近期相对低位' },
+          { name: '振幅稳健', weight: '10%', description: '波动幅度适中(2%-8%)' },
+          { name: '资金体量', weight: '15%', description: '成交金额3-15亿为佳' },
+          { name: '趋势稳健', weight: '15%', description: '开盘涨幅合理(-1%~2%)' }
+        ],
+        riskFilter: '排除ST/*ST、科创板、涨停/跌停、换手率>25%、价格<3元或>20元'
+      }
     }
 
-    cache.set(cacheKey, result, 120)
+    cache.set(cacheKey, result, 60)
     res.json(result)
   } catch (error) {
     console.error('Recommend error:', error)
