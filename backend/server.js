@@ -1,6 +1,11 @@
 import express from 'express'
 import axios from 'axios'
 import NodeCache from 'node-cache'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 const app = express()
 const port = 3001
@@ -375,6 +380,12 @@ app.get('/api/recommend', async (req, res) => {
   }
 })
 
+app.use(express.static('/workspace/frontend/dist'))
+
+app.get('*', (req, res) => {
+  res.sendFile('/workspace/frontend/dist/index.html')
+})
+
 app.listen(port, () => {
-  console.log(`A股短线宝后端服务运行在 http://localhost:${port}`)
+  console.log(`A股短线宝服务运行在 http://localhost:${port}`)
 })
